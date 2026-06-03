@@ -1,0 +1,75 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Scan {
+  id              String                    @id @default(cuid())
+  target          String
+  repositoryOwner String?
+  repositoryName String?
+  repositoryFullName String?
+  repositoryAvatarUrl String?
+  repositoryDefaultBranch String?
+  repositoryLanguage String?
+  repositoryVisibility String?
+  repositorySizeKb Int?
+  repositoryPushedAt DateTime?
+  status          String                    @default("pending")
+  stage           String                    @default("queued")
+  progress        Int                       @default(0)
+  filesDiscovered Int                       @default(0)
+  filesCandidates Int                       @default(0)
+  filesScanned    Int                       @default(0)
+  filesSkipped    Int                       @default(0)
+  scanLimitApplied Boolean                  @default(false)
+  lastMessage     String?
+  score           Int?
+  errorMessage    String?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+  findings        Finding[]
+  recommendations MigrationRecommendation[]
+}
+
+model Finding {
+  id          String   @id @default(cuid())
+  scanId      String
+  algorithm   String
+  category    String
+  riskLevel   String
+  fileContext String   @default("unknown")
+  filePath    String?
+  line        Int?
+  confidence  Float
+  sourceTool  String
+  rawMetadata Json?
+  createdAt   DateTime @default(now())
+  scan        Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@index([scanId])
+  @@index([riskLevel])
+}
+
+model MigrationRecommendation {
+  id                String   @id @default(cuid())
+  scanId            String
+  priority          Int
+  title             String
+  rationale         String
+  recommendedAction String
+  effort            String
+  status            String   @default("open")
+  createdAt         DateTime @default(now())
+  scan              Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@index([scanId])
+  @@index([priority])
+}
