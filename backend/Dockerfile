@@ -2,6 +2,10 @@ FROM node:22-alpine AS base
 WORKDIR /app
 RUN apk add --no-cache git openssl
 
+FROM golang:1.23-alpine AS cryptoscan
+RUN apk add --no-cache git
+RUN go install github.com/csnp/cryptoscan/cmd/cryptoscan@v1.3.0
+
 FROM base AS deps
 COPY package*.json ./
 RUN npm install
@@ -21,5 +25,6 @@ RUN npm install --omit=dev
 COPY prisma ./prisma
 COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/dist ./dist
+COPY --from=cryptoscan /go/bin/cryptoscan /usr/local/bin/cryptoscan
 EXPOSE 3000
 CMD ["npm", "start"]

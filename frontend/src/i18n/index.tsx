@@ -1,57 +1,15 @@
-import React from "react";
 import { en } from "./en";
-import { es } from "./es";
 
-export const dictionaries = {
-  en,
-  es
-};
-
-export type Locale = keyof typeof dictionaries;
 type Dictionary = WidenStrings<typeof en>;
 type TranslationKey = LeafKey<Dictionary>;
 
-type I18nContextValue = {
-  locale: Locale;
-  setLocale: (locale: Locale) => void;
-  t: (key: TranslationKey, values?: Record<string, string | number>) => string;
-};
+export function t(key: TranslationKey, values?: Record<string, string | number>) {
+  const template = readTranslation(en, key);
 
-const I18nContext = React.createContext<I18nContextValue | null>(null);
-
-export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocale] = React.useState<Locale>("en");
-
-  const t = React.useCallback(
-    (key: TranslationKey, values?: Record<string, string | number>) => {
-      const template = readTranslation(dictionaries[locale], key);
-
-      return interpolate(template, values);
-    },
-    [locale]
-  );
-
-  const value = React.useMemo(
-    () => ({
-      locale,
-      setLocale,
-      t
-    }),
-    [locale, t]
-  );
-
-  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
+  return interpolate(template, values);
 }
 
-export function useI18n() {
-  const context = React.useContext(I18nContext);
-
-  if (!context) {
-    throw new Error("useI18n must be used inside I18nProvider");
-  }
-
-  return context;
-}
+export type Translate = typeof t;
 
 function readTranslation(dictionary: Dictionary, key: string) {
   const value = key.split(".").reduce<unknown>((current, segment) => {

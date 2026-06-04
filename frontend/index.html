@@ -3,8 +3,57 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Quantum Migration Intelligence scans repositories for quantum-vulnerable cryptography and turns risk findings into a prioritized post-quantum migration roadmap."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://google-qmi.com/" />
+    <meta property="og:site_name" content="Quantum Migration Intelligence" />
+    <meta property="og:title" content="Quantum Migration Intelligence | Crypto Risk to Post-Quantum Roadmaps" />
+    <meta
+      property="og:description"
+      content="Scan your codebase for quantum-vulnerable cryptography, uncover migration blockers, and generate an actionable post-quantum security roadmap in minutes."
+    />
+    <meta property="og:image" content="https://google-qmi.com/social-preview.png" />
+    <meta property="og:image:secure_url" content="https://google-qmi.com/social-preview.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1731" />
+    <meta property="og:image:height" content="909" />
+    <meta
+      property="og:image:alt"
+      content="Quantum Migration Intelligence dashboard preview showing cryptography risk analysis and a post-quantum migration roadmap."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Quantum Migration Intelligence | Crypto Risk to Post-Quantum Roadmaps" />
+    <meta
+      name="twitter:description"
+      content="Scan your codebase for quantum-vulnerable cryptography and generate a prioritized post-quantum migration plan."
+    />
+    <meta name="twitter:image" content="https://google-qmi.com/social-preview.png" />
+    <meta
+      name="twitter:image:alt"
+      content="Quantum Migration Intelligence dashboard preview showing cryptography risk analysis and a post-quantum migration roadmap."
+    />
     <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <title>QMI | Quantum Migration Intelligence</title>
+    <script>
+      (() => {
+        const storedTheme = window.localStorage.getItem("qmi:theme");
+        const theme =
+          storedTheme === "light" || storedTheme === "dark"
+            ? storedTheme
+            : window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

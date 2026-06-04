@@ -1,4 +1,4 @@
-import { useI18n } from "../i18n";
+import { t } from "../i18n";
 
 export type Toast = {
   id: number;
@@ -12,8 +12,6 @@ type ToastStackProps = {
 };
 
 export function ToastStack({ toasts, onDismiss }: ToastStackProps) {
-  const { t } = useI18n();
-
   return (
     <div className="toast-stack" aria-live="polite" aria-label={t("toasts.notifications")}>
       {toasts.map((toast) => (

@@ -15,8 +15,8 @@ export type ScanSummary = {
   repositoryVisibility: string | null;
   repositorySizeKb: number | null;
   repositoryPushedAt: string | null;
-  status: "pending" | "running" | "completed" | "failed";
-  stage: "queued" | "cloning" | "discovering" | "analyzing" | "planning" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "canceled";
+  stage: "queued" | "cloning" | "discovering" | "analyzing" | "planning" | "completed" | "failed" | "canceled";
   progress: number;
   filesDiscovered: number;
   filesCandidates: number;
@@ -68,6 +68,12 @@ export async function createRepositoryScan(repositoryUrl: string) {
 
 export async function fetchScan(id: string) {
   return request<ScanDetail>(`/api/scans/${id}`);
+}
+
+export async function cancelScan(id: string) {
+  return request<ScanDetail>(`/api/scans/${id}/cancel`, {
+    method: "POST"
+  });
 }
 
 export async function fetchScans() {
