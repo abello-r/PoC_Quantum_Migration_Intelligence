@@ -55,12 +55,14 @@ export class RepositoryScannerAdapter implements ScannerAdapter {
     const workspace = await mkdtemp(join(tmpdir(), "quantum-scan-"));
 
     try {
+      throwIfAborted(context);
       await report(context, {
         stage: "cloning",
         progress: 8,
         message: "cloningRepository"
       });
       await cloneRepository(repositoryUrl, workspace, context);
+      throwIfAborted(context);
       await report(context, {
         stage: "discovering",
         progress: 20,
@@ -84,8 +86,14 @@ export class RepositoryScannerAdapter implements ScannerAdapter {
 
 async function cloneRepository(repositoryUrl: string, workspace: string, context: ScannerContext) {
   let progress = 8;
+  const cloneTimeoutMs = 120_000;
+  const startedAt = Date.now();
   const progressInterval = setInterval(() => {
-    progress = Math.min(progress + 4, 28);
+    if (context.signal?.aborted) {
+      return;
+    }
+
+    progress = calculateTimedProgress(8, 28, startedAt, cloneTimeoutMs);
     void report(context, {
       stage: "cloning",
       progress,
@@ -95,10 +103,15 @@ async function cloneRepository(repositoryUrl: string, workspace: string, context
 
   try {
     await execFileAsync("git", ["clone", "--depth", "1", repositoryUrl, workspace], {
-      timeout: 120_000,
-      maxBuffer: 10 * 1024 * 1024
+      timeout: cloneTimeoutMs,
+      maxBuffer: 10 * 1024 * 1024,
+      signal: context.signal
     });
   } catch (error) {
+    if (context.signal?.aborted) {
+      throw error;
+    }
+
     throw new Error(formatCloneError(error));
   } finally {
     clearInterval(progressInterval);
@@ -146,7 +159,9 @@ function extractCommandOutput(error: unknown) {
 
 async function scanDirectory(root: string, context: ScannerContext) {
   const findings: NormalizedFinding[] = [];
+  throwIfAborted(context);
   const inventory = await collectFiles(root);
+  throwIfAborted(context);
   const prioritizedFiles = prioritizeCandidateFiles(inventory.candidateFiles, root);
   const limitedFiles = prioritizedFiles.slice(0, maxFilesToAnalyze);
   const skippedByLimit = Math.max(prioritizedFiles.length - limitedFiles.length, 0);
@@ -163,6 +178,7 @@ async function scanDirectory(root: string, context: ScannerContext) {
   });
 
   for (const file of limitedFiles) {
+    throwIfAborted(context);
     const relativePath = relative(root, file);
     const fileContext = classifyFileContext(relativePath);
     const fileStat = await stat(file).catch(() => null);
@@ -420,7 +436,17 @@ function rule(algorithm: string, category: string, riskLevel: RiskLevel, pattern
 }
 
 async function report(context: ScannerContext, progress: Parameters<NonNullable<ScannerContext["onProgress"]>>[0]) {
+  if (context.signal?.aborted) {
+    return;
+  }
+
   await context.onProgress?.(progress);
+}
+
+function throwIfAborted(context: ScannerContext) {
+  if (context.signal?.aborted) {
+    throw new Error("Scan canceled");
+  }
 }
 
 function calculateAnalysisProgress(filesScanned: number, filesToScan: number) {
@@ -435,4 +461,10 @@ function readPositiveInteger(name: string, fallback: number) {
   const value = Number(process.env[name]);
 
   return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function calculateTimedProgress(start: number, end: number, startedAt: number, timeoutMs: number) {
+  const elapsedRatio = Math.min((Date.now() - startedAt) / timeoutMs, 1);
+
+  return Math.min(end - 1, start + Math.round((end - start) * elapsedRatio));
 }

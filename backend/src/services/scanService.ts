@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
+import { CryptoScanAdapter } from "../scanners/cryptoScanAdapter.js";
 import { RepositoryScannerAdapter } from "../scanners/repositoryScannerAdapter.js";
 import type { ScannerAdapter, ScanProgress } from "../scanners/scannerAdapter.js";
 import type { NormalizedFinding } from "../types/domain.js";
@@ -17,7 +18,9 @@ const scanInclude = {
 } satisfies Prisma.ScanInclude;
 
 export class ScanService {
-  constructor(private readonly scannerAdapter: ScannerAdapter = new RepositoryScannerAdapter()) {}
+  private readonly runningScans = new Map<string, AbortController>();
+
+  constructor(private readonly scannerAdapter: ScannerAdapter = new CryptoScanAdapter(new RepositoryScannerAdapter())) {}
 
   async createRepositoryScan(repositoryUrl: string) {
     const repositoryMetadata = await fetchGitHubRepositoryMetadata(repositoryUrl);
@@ -33,7 +36,9 @@ export class ScanService {
       }
     });
 
-    void this.runScan(scan.id, repositoryUrl, this.scannerAdapter);
+    const controller = new AbortController();
+    this.runningScans.set(scan.id, controller);
+    void this.runScan(scan.id, repositoryUrl, this.scannerAdapter, controller);
 
     return this.getScan(scan.id);
   }
@@ -90,12 +95,39 @@ export class ScanService {
     });
   }
 
-  private async runScan(scanId: string, repositoryUrl: string, adapter: ScannerAdapter) {
+  async cancelScan(id: string) {
+    const scan = await prisma.scan.findUnique({
+      where: {
+        id
+      }
+    });
+
+    if (!scan) {
+      return null;
+    }
+
+    if (scan.status !== "running" && scan.status !== "pending") {
+      return this.getScan(id);
+    }
+
+    this.runningScans.get(id)?.abort();
+    await this.markScanCanceled(id);
+
+    return this.getScan(id);
+  }
+
+  private async runScan(scanId: string, repositoryUrl: string, adapter: ScannerAdapter, controller: AbortController) {
     try {
       const result = await adapter.scan(repositoryUrl, {
-        onProgress: (progress) => this.updateScanProgress(scanId, progress)
+        onProgress: (progress) => this.updateScanProgress(scanId, progress),
+        signal: controller.signal
       });
-      const score = calculateReadinessScore(result.findings);
+
+      if (controller.signal.aborted || (await this.isScanCanceled(scanId))) {
+        return;
+      }
+
+      const score = result.score ?? calculateReadinessScore(result.findings);
       const recommendations = generateMigrationPlan(result.findings);
 
       await this.updateScanProgress(scanId, {
@@ -142,6 +174,11 @@ export class ScanService {
         })
       ]);
     } catch (error) {
+      if (controller.signal.aborted || (await this.isScanCanceled(scanId))) {
+        await this.markScanCanceled(scanId);
+        return;
+      }
+
       await prisma.scan.update({
         where: {
           id: scanId
@@ -155,13 +192,16 @@ export class ScanService {
           errorMessage: error instanceof Error ? error.message : "Scan failed"
         }
       });
+    } finally {
+      this.runningScans.delete(scanId);
     }
   }
 
   private async updateScanProgress(scanId: string, progress: ScanProgress) {
-    await prisma.scan.update({
+    await prisma.scan.updateMany({
       where: {
-        id: scanId
+        id: scanId,
+        status: "running"
       },
       data: {
         stage: progress.stage,
@@ -174,6 +214,37 @@ export class ScanService {
         scanLimitApplied: progress.scanLimitApplied
       }
     });
+  }
+
+  private async markScanCanceled(scanId: string) {
+    await prisma.scan.updateMany({
+      where: {
+        id: scanId,
+        status: {
+          in: ["running", "pending", "canceled"]
+        }
+      },
+      data: {
+        status: "canceled",
+        stage: "canceled",
+        finishedAt: new Date(),
+        lastMessage: "scanCanceled",
+        errorMessage: null
+      }
+    });
+  }
+
+  private async isScanCanceled(scanId: string) {
+    const scan = await prisma.scan.findUnique({
+      where: {
+        id: scanId
+      },
+      select: {
+        status: true
+      }
+    });
+
+    return scan?.status === "canceled";
   }
 }
 
@@ -205,7 +276,7 @@ function toScanSummary(scan: ScanWithRelations | Awaited<ReturnType<typeof prism
     filesSkipped: scan.filesSkipped,
     scanLimitApplied: scan.scanLimitApplied,
     lastMessage: scan.lastMessage,
-    score: scan.status === "completed" ? calculateReadinessScore(findings) : scan.score,
+    score: scan.score,
     errorMessage: scan.errorMessage,
     createdAt: scan.createdAt,
     startedAt: scan.startedAt,

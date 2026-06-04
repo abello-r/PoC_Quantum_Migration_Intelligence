@@ -46,6 +46,19 @@ export async function registerScanRoutes(app: FastifyInstance) {
     return scan;
   });
 
+  app.post("/scans/:id/cancel", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const scan = await scanService.cancelScan(id);
+
+    if (!scan) {
+      return reply.status(404).send({
+        error: "Scan not found"
+      });
+    }
+
+    return scan;
+  });
+
   app.get("/scans/:id/findings", async (request) => {
     const { id } = request.params as { id: string };
 

@@ -17,12 +17,14 @@ export type ScanProgress = Partial<ScanCoverage> & {
 
 export type ScannerContext = {
   onProgress?: (progress: ScanProgress) => Promise<void> | void;
+  signal?: AbortSignal;
 };
 
 export type ScannerResult = {
   target: string;
   findings: NormalizedFinding[];
   coverage: ScanCoverage;
+  score?: number;
 };
 
 export interface ScannerAdapter {
