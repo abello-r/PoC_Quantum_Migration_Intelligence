@@ -44,16 +44,6 @@ During analysis, repositories are cloned temporarily inside the scanner containe
 
 Private repository access, authentication, AI-assisted code replacement, and complete algorithm documentation are intentionally out of scope for this PoC iteration.
 
-## Stack
-
-- Frontend: React, TypeScript, Vite
-- Backend: Node.js, TypeScript, Fastify
-- Database: PostgreSQL
-- ORM: Prisma
-- Scanner: CryptoScan with internal fallback scanner
-- Reverse proxy: Nginx
-- Runtime: Docker Compose
-
 ## Local Setup
 
 Create the environment file:
@@ -75,26 +65,6 @@ http://localhost
 ```
 
 Nginx serves the frontend and proxies API requests under `/api` to the backend.
-
-## Useful Commands
-
-Validate the frontend build:
-
-```sh
-docker build --target frontend-build -f nginx/Dockerfile .
-```
-
-Validate the backend build:
-
-```sh
-docker build --target build -f backend/Dockerfile backend
-```
-
-Start production-style TLS profile after local certificates are configured:
-
-```sh
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
-```
 
 ## API
 
@@ -125,17 +95,3 @@ GITHUB_TOKEN
 ```
 
 `GITHUB_TOKEN` is optional and server-side only. It can be used to raise public GitHub API rate limits or prepare future private repository support.
-
-## Release Plan
-
-The recommended first PoC tag is:
-
-```text
-v0.1.0
-```
-
-Use semantic versioning while the project matures:
-
-- `v0.x.0` for new PoC capabilities.
-- `v0.x.y` for fixes and polish.
-- `v1.0.0` only after the scanner behavior, migration logic, and documentation are stable enough for broader use.
