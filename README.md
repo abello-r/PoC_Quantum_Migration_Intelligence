@@ -40,8 +40,8 @@ The app turns repository crypto findings into a post-quantum migration roadmap.
 Current PoC capabilities:
 
 - Submit a public GitHub repository URL.
-- Clone the repository in a temporary backend workspace.
-- Detect cryptographic algorithm usage with repository pattern scanning.
+- Analyze repositories with QRAMM CryptoScan (`cryptoscan`) and normalize its JSON findings.
+- Fall back to the internal repository pattern scanner when CryptoScan is unavailable during local development.
 - Store scans, normalized findings, and migration recommendations in PostgreSQL.
 - Display readiness score, risk distribution, findings, and a prioritized migration plan.
 
