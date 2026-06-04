@@ -1,33 +1,68 @@
 import React from "react";
+import { AlgorithmDocsPage } from "./components/AlgorithmDocsPage";
+import { AppFooter, Hero, TopMenu } from "./components/AppChrome";
 import { FindingsTable } from "./components/FindingsTable";
+import { MigrationGuidePage } from "./components/MigrationGuidePage";
 import { MigrationPlanPanel } from "./components/MigrationPlanPanel";
 import { RiskDistribution } from "./components/RiskDistribution";
 import { ScanForm } from "./components/ScanForm";
 import { SummaryPanel } from "./components/SummaryPanel";
 import { ToastStack, type Toast } from "./components/ToastStack";
-import { type Locale, useI18n } from "./i18n";
-import { createRepositoryScan, fetchScan, fetchScans, type ScanDetail } from "./lib/api";
+import { t } from "./i18n";
+import { cancelScan, createRepositoryScan, fetchScan, fetchScans, type RiskLevel, type ScanDetail } from "./lib/api";
 
 const lastScanStorageKey = "qmi:last-scan-id";
 const lastRepositoryUrlStorageKey = "qmi:last-repository-url";
+const themeStorageKey = "qmi:theme";
+type Theme = "light" | "dark";
+type Route =
+  | { name: "dashboard" }
+  | { name: "migration-guide"; scanId: string; recommendationId: string }
+  | { name: "algorithm-docs"; target: string; returnTo?: { scanId: string; recommendationId: string } };
+type ScanRequestFailure = {
+  target: string;
+  message: string;
+};
+type RiskFilter = RiskLevel | "all";
 
 export function App() {
-  const { locale, setLocale, t } = useI18n();
+  const [route, setRoute] = React.useState<Route>(() => parseRoute(window.location.pathname));
+  const [theme, setTheme] = React.useState<Theme>(() => {
+    const storedTheme = window.localStorage.getItem(themeStorageKey);
+
+    if (storedTheme === "light" || storedTheme === "dark") {
+      return storedTheme;
+    }
+
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
   const [repositoryUrl, setRepositoryUrl] = React.useState("");
   const [scan, setScan] = React.useState<ScanDetail | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
+  const [isCanceling, setIsCanceling] = React.useState(false);
+  const [scanRequestFailure, setScanRequestFailure] = React.useState<ScanRequestFailure | null>(null);
+  const [selectedRiskFilter, setSelectedRiskFilter] = React.useState<RiskFilter>("all");
   const [toasts, setToasts] = React.useState<Toast[]>([]);
-  const [isLanguageOpen, setIsLanguageOpen] = React.useState(false);
+  const [failedGuideScanId, setFailedGuideScanId] = React.useState<string | null>(null);
   const toastId = React.useRef(0);
-  const languageOptions = [
-    { label: t("nav.languages.en"), value: "en" },
-    { label: t("nav.languages.es"), value: "es" }
-  ] as const;
-
   React.useEffect(() => {
     document.title = t("app.documentTitle");
-    document.documentElement.lang = locale;
-  }, [locale, t]);
+    document.documentElement.lang = "en";
+  }, [t]);
+
+  React.useEffect(() => {
+    const syncRoute = () => setRoute(parseRoute(window.location.pathname));
+
+    window.addEventListener("popstate", syncRoute);
+
+    return () => window.removeEventListener("popstate", syncRoute);
+  }, []);
+
+  React.useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    window.localStorage.setItem(themeStorageKey, theme);
+  }, [theme]);
 
   React.useEffect(() => {
     let isMounted = true;
@@ -47,6 +82,7 @@ export function App() {
       }
 
       setScan(latestScan);
+      setScanRequestFailure(null);
       setRepositoryUrl(latestScan.target);
       persistLastScan(latestScan);
     };
@@ -59,6 +95,39 @@ export function App() {
   }, []);
 
   React.useEffect(() => {
+    if (route.name !== "migration-guide" || scan?.id === route.scanId) {
+      return;
+    }
+
+    let isMounted = true;
+
+    const loadGuideScan = async () => {
+      setFailedGuideScanId(null);
+      const nextScan = await fetchScan(route.scanId).catch(() => null);
+
+      if (!isMounted) {
+        return;
+      }
+
+      if (!nextScan) {
+        setFailedGuideScanId(route.scanId);
+        return;
+      }
+
+      setScan(nextScan);
+      setScanRequestFailure(null);
+      setRepositoryUrl(nextScan.target);
+      persistLastScan(nextScan);
+    };
+
+    void loadGuideScan();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [route, scan?.id]);
+
+  React.useEffect(() => {
     if (!scan) {
       return;
     }
@@ -67,7 +136,7 @@ export function App() {
   }, [scan]);
 
   React.useEffect(() => {
-    if (!scan || scan.status !== "running") {
+    if (!scan || (scan.status !== "running" && scan.status !== "pending")) {
       return;
     }
 
@@ -85,6 +154,11 @@ export function App() {
           pushToast(t("toasts.scanFailed"), "error");
           window.clearInterval(interval);
         }
+
+        if (updatedScan.status === "canceled") {
+          pushToast(t("toasts.scanCanceled"), "info");
+          window.clearInterval(interval);
+        }
       } catch (error) {
         pushToast(error instanceof Error ? error.message : t("toasts.refreshFailed"), "error");
         window.clearInterval(interval);
@@ -95,17 +169,47 @@ export function App() {
   }, [scan]);
 
   const runScan = async () => {
+    const target = repositoryUrl.trim();
     setIsLoading(true);
+    setScan(null);
+    setScanRequestFailure(null);
+    setSelectedRiskFilter("all");
+    window.localStorage.removeItem(lastScanStorageKey);
+    window.localStorage.setItem(lastRepositoryUrlStorageKey, target);
 
     try {
-      const nextScan = await createRepositoryScan(repositoryUrl);
+      const nextScan = await createRepositoryScan(target);
       setScan(nextScan);
+      setScanRequestFailure(null);
       persistLastScan(nextScan);
       pushToast(t("toasts.scanStarted"), "info");
     } catch (error) {
+      setScanRequestFailure({
+        target,
+        message: error instanceof Error ? error.message : t("summary.requestFailedFallback")
+      });
       pushToast(t("toasts.scanRequestFailed"), "error");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleCancelScan = async () => {
+    if (!scan || (scan.status !== "running" && scan.status !== "pending")) {
+      return;
+    }
+
+    setIsCanceling(true);
+
+    try {
+      const canceledScan = await cancelScan(scan.id);
+      setScan(canceledScan);
+      persistLastScan(canceledScan);
+      pushToast(t("toasts.scanCanceled"), "info");
+    } catch (error) {
+      pushToast(t("toasts.scanCancelFailed"), "error");
+    } finally {
+      setIsCanceling(false);
     }
   };
 
@@ -121,104 +225,208 @@ export function App() {
     setToasts((currentToasts) => currentToasts.filter((toast) => toast.id !== id));
   };
 
+  const showSignInUnavailable = () => {
+    pushToast(t("toasts.signInUnavailable"), "info");
+  };
+
+  const openMigrationGuide = (recommendationId: string) => {
+    if (!scan) {
+      return;
+    }
+
+    const nextPath = `/migration-plan/${scan.id}/${recommendationId}`;
+    window.history.pushState(null, "", nextPath);
+    setRoute({ name: "migration-guide", scanId: scan.id, recommendationId });
+    window.scrollTo({ top: 0 });
+  };
+
+  const returnToDashboard = () => {
+    window.history.pushState(null, "", "/");
+    setRoute({ name: "dashboard" });
+    window.scrollTo({ top: 0 });
+  };
+
+  const openAlgorithmDocs = (target: string) => {
+    const nextPath = `/docs/algorithms/${encodeURIComponent(slugifyAlgorithmTarget(target))}`;
+    const returnTo =
+      route.name === "migration-guide"
+        ? { scanId: route.scanId, recommendationId: route.recommendationId }
+        : route.name === "algorithm-docs"
+          ? route.returnTo
+        : undefined;
+
+    window.history.pushState(null, "", nextPath);
+    setRoute({ name: "algorithm-docs", target, returnTo });
+    window.scrollTo({ top: 0 });
+  };
+
+  const returnFromAlgorithmDocs = () => {
+    if (route.name === "algorithm-docs" && route.returnTo) {
+      const nextPath = `/migration-plan/${route.returnTo.scanId}/${route.returnTo.recommendationId}`;
+      window.history.pushState(null, "", nextPath);
+      setRoute({ name: "migration-guide", scanId: route.returnTo.scanId, recommendationId: route.returnTo.recommendationId });
+    } else {
+      window.history.pushState(null, "", "/");
+      setRoute({ name: "dashboard" });
+    }
+
+    window.scrollTo({ top: 0 });
+  };
+
+  const selectRiskFilter = (risk: RiskFilter) => {
+    setSelectedRiskFilter(risk);
+    window.setTimeout(() => {
+      document.getElementById("findings-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  };
+
+  const activeRecommendation =
+    route.name === "migration-guide" && scan?.id === route.scanId
+      ? scan.recommendations.find((recommendation) => recommendation.id === route.recommendationId) ?? null
+      : null;
+  const isGuideLoading = route.name === "migration-guide" && scan?.id !== route.scanId && failedGuideScanId !== route.scanId;
+
   return (
     <main className="app-shell">
-      <nav className="top-menu" aria-label={t("nav.ariaLabel")}>
-        <div className="language-control">
-          <span>{t("nav.language")}</span>
-          <div className="language-menu">
-            <button
-              type="button"
-              className="language-trigger"
-              aria-expanded={isLanguageOpen}
-              aria-haspopup="listbox"
-              onClick={() => setIsLanguageOpen((current) => !current)}
-            >
-              {t(`nav.languages.${locale}`)}
-              <span aria-hidden="true">⌄</span>
-            </button>
-            {isLanguageOpen ? (
-              <div className="language-options" role="listbox" aria-label={t("nav.languageAriaLabel")}>
-                {languageOptions.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    role="option"
-                    aria-selected={locale === option.value}
-                    onClick={() => {
-                      setLocale(option.value as Locale);
-                      setIsLanguageOpen(false);
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </div>
-        <div className="theme-control" aria-label={t("nav.theme")}>
-          <button type="button" aria-label={t("nav.lightTheme")}>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="4.5" />
-              <path d="M12 3v1.7M12 19.3V21M4.2 4.2l1.2 1.2M18.6 18.6l1.2 1.2M3 12h1.7M19.3 12H21M4.2 19.8l1.2-1.2M18.6 5.4l1.2-1.2" />
-            </svg>
-          </button>
-          <button type="button" aria-label={t("nav.darkTheme")}>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M18.7 14.5A7.2 7.2 0 0 1 9.5 5.3 7.4 7.4 0 1 0 18.7 14.5Z" />
-            </svg>
-          </button>
-        </div>
-        <button type="button" className="menu-button sign-in">{t("nav.signIn")}</button>
-      </nav>
-      <header className="hero">
-        <div className="hero-title-block">
-          <div className="brand-row">
-            <span className="brand-mark">QMI</span>
-            <p className="eyebrow">{t("hero.eyebrow")}</p>
-          </div>
-          <h1>{t("hero.title")}</h1>
-          <div className="title-motion-bar" aria-hidden="true" />
-        </div>
-        <div className="hero-copy">
-          <p className="hero-kicker">{t("hero.kicker")}</p>
-          <p>{t("hero.description")}</p>
-        </div>
-      </header>
+      <TopMenu theme={theme} onThemeChange={setTheme} onHome={returnToDashboard} onSignInUnavailable={showSignInUnavailable} />
+      {route.name === "algorithm-docs" ? (
+        <>
+          <AlgorithmDocsPage
+            target={route.target}
+            backLabel={route.returnTo ? t("algorithmDocs.backToGuide") : t("algorithmDocs.backToDashboard")}
+            onOpenTopic={openAlgorithmDocs}
+            onBack={returnFromAlgorithmDocs}
+          />
+          <ToastStack toasts={toasts} onDismiss={dismissToast} />
+        </>
+      ) : route.name === "migration-guide" ? (
+        isGuideLoading ? (
+          <>
+            <section className="panel guide-missing">
+              <p className="eyebrow">{t("migrationGuide.eyebrow")}</p>
+              <h1>{t("migrationGuide.loadingTitle")}</h1>
+              <p>{t("migrationGuide.loadingDescription")}</p>
+            </section>
+            <ToastStack toasts={toasts} onDismiss={dismissToast} />
+          </>
+        ) : activeRecommendation && scan ? (
+          <>
+            <MigrationGuidePage
+              recommendation={activeRecommendation}
+              scan={scan}
+              onBack={returnToDashboard}
+              onOpenAlgorithmDocs={openAlgorithmDocs}
+              onSignInUnavailable={showSignInUnavailable}
+            />
+            <ToastStack toasts={toasts} onDismiss={dismissToast} />
+          </>
+        ) : (
+          <>
+            <section className="panel guide-missing">
+              <p className="eyebrow">{t("migrationGuide.eyebrow")}</p>
+              <h1>{t("migrationGuide.notFoundTitle")}</h1>
+              <p>{t("migrationGuide.notFoundDescription")}</p>
+              <button type="button" onClick={returnToDashboard}>{t("migrationGuide.back")}</button>
+            </section>
+            <ToastStack toasts={toasts} onDismiss={dismissToast} />
+          </>
+        )
+      ) : (
+        <Dashboard
+          scan={scan}
+          scanRequestFailure={scanRequestFailure}
+          repositoryUrl={repositoryUrl}
+          isLoading={isLoading}
+          onOpenGuide={openMigrationGuide}
+          onOpenAlgorithmDocs={openAlgorithmDocs}
+          onRepositoryUrlChange={setRepositoryUrl}
+          onRunScan={runScan}
+          onCancelScan={handleCancelScan}
+          onSignInUnavailable={showSignInUnavailable}
+          isCanceling={isCanceling}
+          selectedRiskFilter={selectedRiskFilter}
+          onRiskSelect={selectRiskFilter}
+          onRiskFilterChange={setSelectedRiskFilter}
+          toasts={toasts}
+          onDismissToast={dismissToast}
+        />
+      )}
+    </main>
+  );
+}
 
+function Dashboard({
+  scan,
+  scanRequestFailure,
+  repositoryUrl,
+  isLoading,
+  onOpenGuide,
+  onOpenAlgorithmDocs,
+  onRepositoryUrlChange,
+  onRunScan,
+  onCancelScan,
+  onSignInUnavailable,
+  isCanceling,
+  selectedRiskFilter,
+  onRiskSelect,
+  onRiskFilterChange,
+  toasts,
+  onDismissToast
+}: {
+  scan: ScanDetail | null;
+  scanRequestFailure: ScanRequestFailure | null;
+  repositoryUrl: string;
+  isLoading: boolean;
+  onOpenGuide: (recommendationId: string) => void;
+  onOpenAlgorithmDocs: (target: string) => void;
+  onRepositoryUrlChange: (repositoryUrl: string) => void;
+  onRunScan: () => void;
+  onCancelScan: () => void;
+  onSignInUnavailable: () => void;
+  isCanceling: boolean;
+  selectedRiskFilter: RiskFilter;
+  onRiskSelect: (risk: RiskLevel) => void;
+  onRiskFilterChange: (risk: RiskFilter) => void;
+  toasts: Toast[];
+  onDismissToast: (id: number) => void;
+}) {
+  return (
+    <>
+      <Hero />
       <ScanForm
         repositoryUrl={repositoryUrl}
+        scan={scan}
         isLoading={isLoading}
-        onRepositoryUrlChange={setRepositoryUrl}
-        onRunScan={runScan}
+        onRepositoryUrlChange={onRepositoryUrlChange}
+        onRunScan={onRunScan}
       />
-      <SummaryPanel scan={scan} isSubmitting={isLoading} />
-
+      <SummaryPanel
+        scan={scan}
+        requestFailure={scanRequestFailure}
+        isSubmitting={isLoading}
+        isCanceling={isCanceling}
+        onCancelScan={onCancelScan}
+        onSignInUnavailable={onSignInUnavailable}
+      />
       <section className="dashboard-grid">
-        <RiskDistribution summary={scan?.riskSummary ?? null} />
-        <MigrationPlanPanel recommendations={scan?.recommendations ?? []} />
+        <RiskDistribution summary={scan?.riskSummary ?? null} selectedRisk={selectedRiskFilter} onRiskSelect={onRiskSelect} />
+        <MigrationPlanPanel
+          recommendations={scan?.recommendations ?? []}
+          onOpenGuide={onOpenGuide}
+          onOpenAlgorithmDocs={onOpenAlgorithmDocs}
+        />
       </section>
-
       <FindingsTable
         findings={scan?.findings ?? []}
         repositoryUrl={scan?.target ?? null}
         defaultBranch={scan?.repositoryDefaultBranch ?? null}
         isScanCompleted={scan?.status === "completed"}
+        selectedRisk={selectedRiskFilter}
+        onRiskFilterChange={onRiskFilterChange}
       />
-      <footer className="app-footer">
-        <span>{t("footer.ecosystemIntent")}</span>
-        <span className="footer-logos" aria-label={t("footer.logosLabel")}>
-          <img src="/brand-assets/google-logo.png" alt={t("footer.googleLogoAlt")} />
-          <span className="logo-link-mark" aria-hidden="true">{t("footer.linkMark")}</span>
-          <img className="virustotal-logo" src="/brand-assets/virustotal-logo.png" alt={t("footer.virustotalLogoAlt")} />
-        </span>
-        <span className="footer-credit">
-          {t("footer.inspiredBy")} <a href="https://qramm.org/open-source-tools.html" target="_blank" rel="noreferrer">{t("footer.qrammTools")}</a>.
-        </span>
-      </footer>
-      <ToastStack toasts={toasts} onDismiss={dismissToast} />
-    </main>
+      <AppFooter />
+      <ToastStack toasts={toasts} onDismiss={onDismissToast} />
+    </>
   );
 }
 
@@ -232,4 +440,48 @@ async function fetchLatestScan() {
 function persistLastScan(scan: ScanDetail) {
   window.localStorage.setItem(lastScanStorageKey, scan.id);
   window.localStorage.setItem(lastRepositoryUrlStorageKey, scan.target);
+}
+
+function parseRoute(pathname: string): Route {
+  const docsMatch = pathname.match(/^\/docs\/algorithms\/([^/]+)\/?$/);
+
+  if (docsMatch) {
+    return {
+      name: "algorithm-docs",
+      target: deslugifyAlgorithmTarget(decodeURIComponent(docsMatch[1]))
+    };
+  }
+
+  const match = pathname.match(/^\/migration-plan\/([^/]+)\/([^/]+)\/?$/);
+
+  if (!match) {
+    return { name: "dashboard" };
+  }
+
+  return {
+    name: "migration-guide",
+    scanId: decodeURIComponent(match[1]),
+    recommendationId: decodeURIComponent(match[2])
+  };
+}
+
+function slugifyAlgorithmTarget(target: string) {
+  return target.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "overview";
+}
+
+function deslugifyAlgorithmTarget(slug: string) {
+  const knownTargets: Record<string, string> = {
+    overview: "Overview",
+    "ml-kem": "ML-KEM",
+    "ml-dsa-slh-dsa": "ML-DSA / SLH-DSA",
+    "aes-256-sha-384": "AES-256 / SHA-384+",
+    "deprecated-algorithms": "Deprecated algorithms",
+    "hybrid-rollout": "Hybrid rollout"
+  };
+
+  if (knownTargets[slug]) {
+    return knownTargets[slug];
+  }
+
+  return slug.split("-").filter(Boolean).map((part) => part.toUpperCase()).join("-");
 }
